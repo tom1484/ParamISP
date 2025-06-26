@@ -369,10 +369,11 @@ class CheckpointPaths(Namespace):
     def ckpt_paths(self) -> list[Path]:
         runs_path = RunsPath(self).runs_path
         for name in self.ckpt_names:
-            if "weights" in name: # using official weights
-                return [Path("/workspace", name)]
-            else:
-                return [Path(runs_path, f"checkpoints/{name}.ckpt")]
+            # if "weights" in name: # using official weights
+            #     return [Path("/workspace", name)]
+            # else:
+            #     return [Path(runs_path, f"checkpoints/{name}.ckpt")]
+            return [Path(name).absolute()]
 
 class SaveConfig(Namespace):
     save_best: int
@@ -392,6 +393,18 @@ class SaveConfig(Namespace):
                             help=cls.help("Frequency of saving checkpoints", freq))
         parser.add_argument("--early-stop", metavar="N", type=int, default=early_stop,
                             help=cls.help("Number of epochs to wait before early stopping", early_stop))
+
+
+class Precision(Namespace):
+    precision: str
+
+    @classmethod
+    def add_to(
+        cls, parser: argparse.ArgumentParser,
+        default: str = "32",
+    ):
+        parser.add_argument("--precision", metavar="NAME", choices=["16", "32", "64", "bf16", "mixed"], default=default,
+                            help=cls.help("Precision to use", default))
 
 
 class PretrainedPath(Namespace):
