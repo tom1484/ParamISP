@@ -4,6 +4,7 @@ import shutil
 import os
 import sys
 import logging
+import pdb
 
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger, CSVLogger, WandbLogger
@@ -124,9 +125,11 @@ def train(
         save_freq = None
         early_stop = 0
 
-    # logger = TensorBoardLogger(save_dir=runs_path.parent.as_posix(), name=runs_path.name, version="train",
-    #                            default_hp_metric=False)
-    logger = WandbLogger(project="ParamISP")
+    if args.wandb:
+        logger = WandbLogger(project="ParamISP")
+    else:
+        logger = TensorBoardLogger(save_dir=runs_path.parent.as_posix(), name=runs_path.name, version="train",
+                                default_hp_metric=False)
 
 
     callbacks: list[Callback] = []

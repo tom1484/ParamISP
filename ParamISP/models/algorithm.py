@@ -116,12 +116,12 @@ class AlgorithmOnlyModel(pl.LightningModule):
     def set_attributes(self):
         self.demosaic = layers.bayer.Demosaic()
 
-    # def tensorboard_add_images(self, images: dict, step: int | None = None, dataformats: str = "CHW"):
-    #     tensorboard: SummaryWriter = self.logger.experiment  # type: ignore
-    #     for name, image in images.items():
-    #         tensorboard.add_image(name, image.clip(0, 1), global_step=step, dataformats=dataformats)
+    def tensorboard_add_images(self, images: dict, step: int | None = None, dataformats: str = "CHW"):
+        tensorboard: SummaryWriter = self.logger.experiment  # type: ignore
+        for name, image in images.items():
+            tensorboard.add_image(name, image.clip(0, 1), global_step=step, dataformats=dataformats)
 
-    def logger_add_images(self, images: dict, step: int | None = None, dataformats: str = "CHW"):
+    def wandb_add_images(self, images: dict, step: int | None = None, dataformats: str = "CHW"):
         run = self.logger.experiment  # type: ignore
         for name, image in images.items():
             img_np = image.clip(0, 1).permute(1, 2, 0).cpu().numpy()
@@ -168,10 +168,16 @@ class AlgorithmOnlyModel(pl.LightningModule):
             images = {key: value[:4] for key, value in images.items()}
             batch_size = 4
 
-        self.logger_add_images({
-            key: make_grid(value, nrow=batch_size, value_range=(0, 1))
-            for key, value in images.items()
-        }, self.current_epoch)
+        if self.args.wandb:
+            self.wandb_add_images({
+                key: make_grid(value, nrow=batch_size, value_range=(0, 1))
+                for key, value in images.items()
+            }, self.current_epoch)
+        else:
+            self.tensorboard_add_images({
+                key: make_grid(value, nrow=batch_size, value_range=(0, 1))
+                for key, value in images.items()
+            }, self.current_epoch)
 
     def log_image_on_predict(self, image: torch.Tensor, name: str):
         imwriter: ImageWriter = self.logger.experiment  # type: ignore

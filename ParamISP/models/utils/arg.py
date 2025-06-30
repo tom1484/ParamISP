@@ -500,3 +500,15 @@ class Mode(Namespace):
     @classmethod
     def add_subparsers(cls, parser: argparse.ArgumentParser):
         return parser.add_subparsers(dest="mode", required=True, help="Running mode")
+
+
+class Wandb(Namespace):
+    wandb: int
+
+    @classmethod
+    def add_to(
+        cls, parser: argparse.ArgumentParser,
+        default: bool = False,
+    ):
+        parser.add_argument("--wandb", metavar="BOOLEAN", type=bool, default=default,
+                            help=cls.help("Whether log to W&B", default))

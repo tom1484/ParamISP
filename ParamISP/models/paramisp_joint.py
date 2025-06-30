@@ -49,7 +49,7 @@ import models.paramisp
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="InvISP")
+    parser = argparse.ArgumentParser(description="ParamISP")
     parser.add_argument("-o", "--runs-name", metavar="NAME", required=True, help="Name of the output runs folder")  # noqa: E501
     parser.add_argument("-O", "--runs-root", metavar="PATH", default=(projroot/"runs").as_posix(), help="Parent path of the runs directory")  # noqa: E501
     parser.add_argument("--bayer-pattern", metavar="CCCC", choices=["RGGB", "GRBG", "GBRG", "BGGR"], default="RGGB", help="Bayer pattern to use")  # noqa: E501
@@ -57,7 +57,7 @@ def parse_args():
 
     subparsers = parser.add_subparsers(dest="mode", required=True, description="Train or Test")  # noqa: E501
 
-    parser_train = subparsers.add_parser("train", help="Train InvISP")
+    parser_train = subparsers.add_parser("train", help="Train ParamISP")
     parser_train.add_argument("--camera", metavar="[NAME,...]", type=lambda s: s.split(","), default=",".join(data.modules.EVERY_CAMERA_MODEL), help="Name of the dataset to use")  # noqa: E501
     parser_train.add_argument("--crop-size", metavar="N", type=int, default=448, help="Crop size of patches")  # noqa: E501
     parser_train.add_argument("-b", "--batch-size", metavar="N", type=int, default=2, help="Batch size for training")  # noqa: E501
@@ -75,14 +75,15 @@ def parse_args():
     parser_train.add_argument("--pisp-inv", metavar="PATH", required=True, help="Path to the pisp model")  # noqa: E501
     parser_train.add_argument("--pisp-fwd", metavar="PATH", required=True, help="Path to the pisp model")  # noqa: E501
 
-    parser_test = subparsers.add_parser("test", help="Test InvISP")
+    parser_test = subparsers.add_parser("test", help="Test ParamISP")
     parser_test.add_argument("--camera", metavar="[NAME,...]", type=lambda s: s.split(","), default=",".join(data.modules.EVERY_CAMERA_MODEL), help="Name of the dataset to use")  # noqa: E501
     parser_test.add_argument("--ckpt", metavar="[NAME,...]", default="best-*", help="Checkpoint names")  # noqa: E501
     parser_test.add_argument("-b", "--batch-size", metavar="N", type=int, default=0, help="Batch size for testing")  # noqa: E501
 
-    parser_predict = subparsers.add_parser("predict", help="Predict InvISP")
+    parser_predict = subparsers.add_parser("predict", help="Predict ParamISP")
     parser_predict.add_argument("--camera", metavar="[NAME,...]", type=lambda s: s.split(","), default=",".join(data.modules.EVERY_CAMERA_MODEL), help="Name of the dataset to use")  # noqa: E501
     parser_predict.add_argument("--ckpt", metavar="[NAME,...]", default="best-*", help="Checkpoint names")  # noqa: E501
+    parser_predict.add_argument("--wandb", metavar="B", default=False, help="Use W&B or not")  # noqa: E501
 
     args = parser.parse_args()
     args.gpus = torch.cuda.device_count()

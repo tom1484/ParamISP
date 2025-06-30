@@ -63,6 +63,7 @@ class TrainArgs(
     arg.PretrainedPath,
     arg.PreviousStageWeightPath,
     arg.SaveConfig,
+    arg.Wandb,
 ):
     @classmethod
     def add_to(cls, parser: argparse.ArgumentParser):
@@ -79,6 +80,7 @@ class TrainArgs(
         arg.PretrainedPath.add_to(parser)
         arg.PreviousStageWeightPath.add_to(parser)
         arg.SaveConfig.add_to(parser)
+        arg.Wandb.add_to(parser)
 
 
 class TestArgs(
