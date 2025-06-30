@@ -2,6 +2,7 @@
 import argparse
 
 import pytorch_lightning as pl
+import wandb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -115,10 +116,16 @@ class AlgorithmOnlyModel(pl.LightningModule):
     def set_attributes(self):
         self.demosaic = layers.bayer.Demosaic()
 
-    def tensorboard_add_images(self, images: dict, step: int | None = None, dataformats: str = "CHW"):
-        tensorboard: SummaryWriter = self.logger.experiment  # type: ignore
+    # def tensorboard_add_images(self, images: dict, step: int | None = None, dataformats: str = "CHW"):
+    #     tensorboard: SummaryWriter = self.logger.experiment  # type: ignore
+    #     for name, image in images.items():
+    #         tensorboard.add_image(name, image.clip(0, 1), global_step=step, dataformats=dataformats)
+
+    def logger_add_images(self, images: dict, step: int | None = None, dataformats: str = "CHW"):
+        run = self.logger.experiment  # type: ignore
         for name, image in images.items():
-            tensorboard.add_image(name, image.clip(0, 1), global_step=step, dataformats=dataformats)
+            img_np = image.clip(0, 1).permute(1, 2, 0).cpu().numpy()
+            run.log({name: [wandb.Image(img_np)]}, step=step)
 
     def csv_log_metrics(self, metrics: dict, step: int | None = None):
         assert self.logger is not None
@@ -161,7 +168,7 @@ class AlgorithmOnlyModel(pl.LightningModule):
             images = {key: value[:4] for key, value in images.items()}
             batch_size = 4
 
-        self.tensorboard_add_images({
+        self.logger_add_images({
             key: make_grid(value, nrow=batch_size, value_range=(0, 1))
             for key, value in images.items()
         }, self.current_epoch)

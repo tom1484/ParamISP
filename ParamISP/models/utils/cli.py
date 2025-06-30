@@ -6,10 +6,12 @@ import sys
 import logging
 
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import TensorBoardLogger, CSVLogger
+from pytorch_lightning.loggers import TensorBoardLogger, CSVLogger, WandbLogger
 from pytorch_lightning.callbacks import Callback, ModelCheckpoint, EarlyStopping
 from pytorch_lightning.callbacks.progress.tqdm_progress import TQDMProgressBar
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
+
+import wandb
 
 import utils.path
 import utils.env
@@ -122,8 +124,10 @@ def train(
         save_freq = None
         early_stop = 0
 
-    logger = TensorBoardLogger(save_dir=runs_path.parent.as_posix(), name=runs_path.name, version="train",
-                               default_hp_metric=False)
+    # logger = TensorBoardLogger(save_dir=runs_path.parent.as_posix(), name=runs_path.name, version="train",
+    #                            default_hp_metric=False)
+    logger = WandbLogger(project="ParamISP")
+
 
     callbacks: list[Callback] = []
 
@@ -145,6 +149,8 @@ def train(
 
     trainer: pl.Trainer = pl.Trainer.from_argparse_args(
         args, logger=logger, callbacks=callbacks, profiler=profiler, strategy = DDPStrategy(find_unused_parameters=True)) ##
+
+    logger.log_hyperparams(args)
 
     trainer.fit(model, datamodule=datamodule, ckpt_path=resume_path)
 

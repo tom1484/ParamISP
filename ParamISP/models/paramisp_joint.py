@@ -315,23 +315,27 @@ class ParamISPJointly(LightningModule):
         }, on_step=False, on_epoch=True, batch_size=rgb_gt.size(0))
 
         if batch_idx == 0:
-            writer: SummaryWriter = self.logger.experiment
-            writer.add_image("val/raw_gt_vis",
-                             make_grid(self.raw_visualize(raw_gt, batch["bayer_pattern"], batch["white_balance"], batch["color_matrix"]),
-                                       nrow=4, value_range=(0, 1)),
-                             global_step=self.current_epoch)
-            writer.add_image("val/raw_est_vis",
-                             make_grid(self.raw_visualize(raw_est, batch["bayer_pattern"], batch["white_balance"], batch["color_matrix"]),
-                                       nrow=4, value_range=(0, 1)),
-                             global_step=self.current_epoch)
-            writer.add_image("val/rgb_gt_vis",
-                             make_grid(rgb_gt,
-                                       nrow=4, value_range=(0, 1)),
-                             global_step=self.current_epoch)
-            writer.add_image("val/rgb_rc_est_vis",
-                             make_grid(rgb_rc_est,
-                                       nrow=4, value_range=(0, 1)),
-                             global_step=self.current_epoch)
+            # Original TensorBoard logging (commented out)
+            # writer: SummaryWriter = self.logger.experiment
+            # writer.add_image("val/raw_gt_vis", make_grid(self.raw_visualize(raw_gt, batch["bayer_pattern"], batch["white_balance"], batch["color_matrix"]), nrow=4, value_range=(0, 1)), global_step=self.current_epoch)
+            # writer.add_image("val/raw_est_vis", make_grid(self.raw_visualize(raw_est, batch["bayer_pattern"], batch["white_balance"], batch["color_matrix"]), nrow=4, value_range=(0, 1)), global_step=self.current_epoch)
+            # writer.add_image("val/rgb_gt_vis", make_grid(rgb_gt, nrow=4, value_range=(0, 1)), global_step=self.current_epoch)
+            # writer.add_image("val/rgb_rc_est_vis", make_grid(rgb_rc_est, nrow=4, value_range=(0, 1)), global_step=self.current_epoch)
+            # Wandb logging
+            try:
+                import wandb
+                run = self.logger.experiment
+                imgs = {
+                    "val/raw_gt_vis": make_grid(self.raw_visualize(raw_gt, batch["bayer_pattern"], batch["white_balance"], batch["color_matrix"]), nrow=4, value_range=(0, 1)),
+                    "val/raw_est_vis": make_grid(self.raw_visualize(raw_est, batch["bayer_pattern"], batch["white_balance"], batch["color_matrix"]), nrow=4, value_range=(0, 1)),
+                    "val/rgb_gt_vis": make_grid(rgb_gt, nrow=4, value_range=(0, 1)),
+                    "val/rgb_rc_est_vis": make_grid(rgb_rc_est, nrow=4, value_range=(0, 1)),
+                }
+                for name, grid in imgs.items():
+                    img_np = grid.clip(0,1).permute(1,2,0).cpu().numpy()
+                    run.log({name: [wandb.Image(img_np)]}, step=self.current_epoch)
+            except Exception:
+                pass
         return metrics
 
     def raw_visualize(self, x: torch.Tensor, bayer_pattern: torch.Tensor,
