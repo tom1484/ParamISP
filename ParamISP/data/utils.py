@@ -25,6 +25,9 @@ EVERY_CAMERA_MODEL: list[CameraModel] = re.findall(r"'(.+?)'", str(CameraModel))
 CropType: TypeAlias = Literal["full", "center", "random", "5", "13"]
 EVERY_CROP_TYPE: list[CropType] = re.findall(r"'(.+?)'", str(CropType))
 
+Dataset: TypeAlias = Literal["RAISE", "realblursrc", "S7-ISP", "FIVEK"]
+EVERY_DATASET: list[Dataset] = re.findall(r"'(.+?)'", str(Dataset))
+
 
 def patch_name(imtype: Literal["raw", "rgb"], i: int, j: int) -> str:
     return f"{imtype}-{PATCH_SIZE}-{i:05}-{j:05}.tif"

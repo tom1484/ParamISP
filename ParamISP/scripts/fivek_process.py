@@ -79,7 +79,7 @@ def extract_extra(tags):
     return extras
 
 
-def rawpy_to_meta(raw: RawPy) -> dict | None:
+def rawpy_to_meta(raw: RawPy, extra: dict) -> dict | None:
     """
     Convert a rawpy.RawPy object to a standardized metadata dictionary.
     We assume the two green channels are the same.
@@ -108,6 +108,7 @@ def rawpy_to_meta(raw: RawPy) -> dict | None:
         "white_level": white_level,
         "white_balance": cam_wb,
         "camera_matrix": camera_matrix,
+        'camera_name': extra["camera_name"]
     }
 
 
@@ -135,7 +136,7 @@ def main(args):
 
     for source in sources:
         print(f"Processing {source} ...")
-        for file in tqdm(os.listdir(source)):
+        for file in tqdm(sorted(os.listdir(source))):
             path = join(source, file)
             basename = file.split(".")[0]
             id = basename.split("-")[0]
@@ -156,7 +157,7 @@ def main(args):
             if raw.shape != rgb.shape[:2]:
                 continue
 
-            meta = rawpy_to_meta(raw_data)
+            meta = rawpy_to_meta(raw_data, extra)
             # Ensure the meta data can be extracted
             if meta is None:
                 continue
@@ -181,7 +182,7 @@ def main(args):
 
                 for r in range(0, height, 512):
                     for c in range(0, width, 512):
-                        raw_patch = raw[r : r + 512, c : c + 512]
+                        raw_patch = raw[r : r + 512, c : c + 512, None]
                         rgb_patch = rgb[r : r + 512, c : c + 512, :]
 
                         raw_filename = f"raw-512-{r:05d}-{c:05d}.tif"

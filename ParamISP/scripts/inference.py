@@ -66,15 +66,11 @@ def parse_args():
     # Basic arguments
     parser.add_argument("-o", "--output-dir", type=str, required=True, help="Output directory for generated images")
     parser.add_argument("--ckpt-path", type=str, required=True, help="Path to the model checkpoint")
-    
-    # Input image options (mutually exclusive)
-    input_group = parser.add_mutually_exclusive_group(required=True)
-    input_group.add_argument("--raw-path", type=str, help="Path to the input RAW image file")
-    input_group.add_argument("--image-id", type=str, help="Image ID from dataset (e.g., r01170470t)")
+    parser.add_argument("--image-id", type=str, required=True, help="Image ID from dataset (e.g., r01170470t)")
     
     # Camera parameters
-    parser.add_argument("--camera-model", choices=data.utils.EVERY_CAMERA_MODEL, default="D7000", help="Camera model")
-    parser.add_argument("--bayer-pattern", choices=["RGGB", "GRBG", "GBRG", "BGGR"], help="Bayer pattern of the RAW image")
+    parser.add_argument("--camera-model", choices=data.utils.EVERY_CAMERA_MODEL, help="Camera model")
+    parser.add_argument("--dataset", choices=data.utils.EVERY_DATASET, help="Camera model")
     
     # White balance parameters - support both vector and individual components
     wb_group = parser.add_mutually_exclusive_group()
@@ -112,16 +108,16 @@ def parse_args():
 
     return parser.parse_args()
 
-def find_image_in_datalist(image_id, camera_model):
+def find_image_in_datalist(image_id, list_name):
     """Find the image ID in the datalists for the specified camera model."""
     # Check in training datalist
     datalist_paths = [
-        Path("ParamISP/data/datalist") / f"{camera_model}.train.txt",
-        Path("ParamISP/data/datalist") / f"{camera_model}.val.txt",
-        Path("ParamISP/data/datalist") / f"{camera_model}.test.txt",
-        Path("data/datalist") / f"{camera_model}.train.txt",
-        Path("data/datalist") / f"{camera_model}.val.txt",
-        Path("data/datalist") / f"{camera_model}.test.txt",
+        Path("data/datalist") / f"{list_name}.train.txt",
+        Path("data/datalist") / f"{list_name}.val.txt",
+        Path("data/datalist") / f"{list_name}.test.txt",
+        Path("data/datalist/dataset") / f"{list_name}.train.txt",
+        Path("data/datalist/dataset") / f"{list_name}.val.txt",
+        Path("data/datalist/dataset") / f"{list_name}.test.txt",
     ]
     
     for datalist_path in datalist_paths:
@@ -134,10 +130,47 @@ def find_image_in_datalist(image_id, camera_model):
     
     # If we get here, the image ID wasn't found
     print(f"Available datalist paths: {[str(p) for p in datalist_paths if p.exists()]}")
-    print(f"Searched for image ID '{image_id}' in camera model '{camera_model}'")
-    raise ValueError(f"Image ID '{image_id}' not found in any datalist for camera model '{camera_model}'")
+    print(f"Searched for image ID '{image_id}' in datalist '{list_name}'")
+    raise ValueError(f"Image ID '{image_id}' not found in any datalist for datalist '{list_name}'")
 
-def load_image_from_dataset(image_id, camera_model, bayer_pattern):
+def load_image_base_on_dataset(image_id, dataset):
+    """Load an image from the dataset using its ID."""
+    # Find the image in datalists
+    datalist_path, image_index = find_image_in_datalist(image_id, dataset)
+    
+    # Determine the dataset directory based on camera model
+    match dataset:
+        case "realblursrc":
+            data_dir = utils.env.get_or_throw("REALBLURSRC_PATCHSET_DIR")
+        case "RAISE":
+            data_dir = utils.env.get_or_throw("RAISE_PATCHSET_DIR")
+        case "S7-ISP":
+            data_dir = utils.env.get_or_throw("S7ISP_PATCHSET_DIR")
+        case "FIVEK":
+            data_dir = utils.env.get_or_throw("FIVEK_PATCHSET_DIR")
+        case _: 
+            raise ValueError(f"Invalid dataset type: {dataset}")
+    
+    print(f"Using data directory: {data_dir}")
+    
+    # Create a dataset instance
+    dataset = data.utils.PatchDataset(
+        datalist_file=datalist_path,
+        data_dir=Path(data_dir),
+        use_extra=True
+    )
+    
+    print(f"Dataset created with {len(dataset)} images")
+    print(f"Loading image at index {image_index}")
+    
+    # Get the image data
+    image_data = dataset[image_index]
+    if "camera_name" not in image_data:
+        raise ValueError(f"camera_name not in image_data")
+    
+    return image_data
+
+def load_image_base_on_camera(image_id, camera_model):
     """Load an image from the dataset using its ID."""
     # Find the image in datalists
     datalist_path, image_index = find_image_in_datalist(image_id, camera_model)
@@ -159,7 +192,6 @@ def load_image_from_dataset(image_id, camera_model, bayer_pattern):
     dataset = data.utils.PatchDataset(
         datalist_file=datalist_path,
         data_dir=Path(data_dir),
-        bayer_pattern=bayer_pattern,
         use_extra=True
     )
     
@@ -176,23 +208,6 @@ def load_image_from_dataset(image_id, camera_model, bayer_pattern):
     
     return image_data
 
-def load_raw_image(file_path, bayer_pattern, black_level, white_level):
-    """Load and preprocess a RAW image from file."""
-    raw = utils.io.loadtiff(file_path).squeeze(-1)
-    
-    # Normalize RAW data
-    raw = utils.convert.dequantize(
-        raw, 
-        augmentation=False,
-        in_range=(black_level, white_level), 
-        bayer_pattern=np.array([[c == 'R' for c in bayer_pattern[::2]], 
-                                [c == 'R' for c in bayer_pattern[1::2]]])
-    )
-    
-    # Convert to tensor and ensure it has shape [batch, channels, height, width]
-    tensor = torch.from_numpy(raw).float()
-    
-    return tensor
 
 def get_camera_name_map():
     """Get the mapping from camera model to camera name."""
@@ -306,127 +321,116 @@ def main():
     model.eval()
     
     # Load input image
-    if args.image_id:
+    if args.camera_model is None and args.dataset is None:
+        raise ValueError("At least one of camera_model and dataset needs to be specified.")
+    if args.camera_model:
         print(f"Loading image with ID '{args.image_id}' from {args.camera_model} dataset...")
-        image_data = load_image_from_dataset(args.image_id, args.camera_model, args.bayer_pattern)
+        image_data = load_image_base_on_camera(args.image_id, args.camera_model)
+    if args.dataset:
+        print(f"Loading image with ID '{args.image_id}' from {args.dataset} dataset...")
+        image_data = load_image_base_on_dataset(args.image_id, args.dataset)
+    
+    # Debug print to check image_data contents
+    print(f"Image data keys: {list(image_data.keys())}")
+    
+    # Convert the image data to a batch
+    raw_tensor = torch.from_numpy(image_data["raw"]).to(args.device)
+    
+    # Ensure raw tensor has correct shape [batch, channels, height, width]
+    if raw_tensor.dim() == 2:  # [height, width]
+        raw_tensor = raw_tensor.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+    elif raw_tensor.dim() == 3:  # [channels, height, width] or [batch, height, width]
+        # Assume it's [batch, height, width] and add channel dimension
+        raw_tensor = raw_tensor.unsqueeze(1)
+    
+    # print(f"Raw tensor shape: {raw_tensor.shape}")
+    
+    # Always start with the original parameters from the dataset
+    print("Loading original parameters from the dataset")
+    batch = {
+        "raw": raw_tensor,
+        "bayer_pattern": torch.from_numpy(image_data["bayer_pattern"]).to(args.device),
+        "white_balance": torch.from_numpy(image_data["white_balance"]).unsqueeze(0).to(args.device),
+        "color_matrix": torch.from_numpy(image_data["color_matrix"]).unsqueeze(0).to(args.device),
+        "focal_length": torch.tensor([image_data["focal_length"]]).to(args.device),
+        "f_number": torch.tensor([image_data["f_number"]]).to(args.device),
+        "exposure_time": torch.tensor([image_data["exposure_time"]]).to(args.device),
+        "iso_sensitivity": torch.tensor([image_data["iso_sensitivity"]]).to(args.device),
+        "quantized_level": torch.from_numpy(np.array([image_data["quantized_level"]])).to(args.device),
+        "inst_id": [image_data["inst_id"]],
+        "index": torch.tensor([image_data["index"]]),
+    }
+    
+    # Add camera_name if it exists in image_data, otherwise use the camera model
+    if "camera_name" in image_data:
+        batch["camera_name"] = [image_data["camera_name"]]
+    else:
+        camera_name_map = get_camera_name_map()
+        batch["camera_name"] = [camera_name_map[args.camera_model]]
+    
+    # Override white balance if specified
+    if args.white_balance is not None:
+        print(f"Using white balance from CLI: {args.white_balance}")
+        wb = args.white_balance
+        white_balance = torch.tensor([wb[0], wb[1], wb[2]]).unsqueeze(0).to(args.device)
+        batch["white_balance"] = torch.from_numpy(utils.camera.normalize_whitebalance(white_balance.cpu().numpy())).to(args.device)
+    else:
+        # Handle individual white balance components
+        default_wb = batch["white_balance"][0].cpu().numpy()
+        modified = False
         
-        # Debug print to check image_data contents
-        print(f"Image data keys: {list(image_data.keys())}")
+        if args.wb_r is not None:
+            default_wb[0] = args.wb_r
+            modified = True
         
-        # Convert the image data to a batch
-        raw_tensor = torch.from_numpy(image_data["raw"]).to(args.device)
+        if args.wb_g is not None:
+            default_wb[1] = args.wb_g
+            modified = True
         
-        # Ensure raw tensor has correct shape [batch, channels, height, width]
-        if raw_tensor.dim() == 2:  # [height, width]
-            raw_tensor = raw_tensor.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
-        elif raw_tensor.dim() == 3:  # [channels, height, width] or [batch, height, width]
-            # Assume it's [batch, height, width] and add channel dimension
-            raw_tensor = raw_tensor.unsqueeze(1)
+        if args.wb_b is not None:
+            default_wb[2] = args.wb_b
+            modified = True
         
-        # print(f"Raw tensor shape: {raw_tensor.shape}")
-        
-        # Always start with the original parameters from the dataset
-        print("Loading original parameters from the dataset")
-        batch = {
-            "raw": raw_tensor,
-            "bayer_pattern": torch.from_numpy(image_data["bayer_pattern"]).to(args.device),
-            "white_balance": torch.from_numpy(image_data["white_balance"]).unsqueeze(0).to(args.device),
-            "color_matrix": torch.from_numpy(image_data["color_matrix"]).unsqueeze(0).to(args.device),
-            "focal_length": torch.tensor([image_data["focal_length"]]).to(args.device),
-            "f_number": torch.tensor([image_data["f_number"]]).to(args.device),
-            "exposure_time": torch.tensor([image_data["exposure_time"]]).to(args.device),
-            "iso_sensitivity": torch.tensor([image_data["iso_sensitivity"]]).to(args.device),
-            "quantized_level": torch.from_numpy(np.array([image_data["quantized_level"]])).to(args.device),
-            "inst_id": [image_data["inst_id"]],
-            "index": torch.tensor([image_data["index"]]),
-        }
-        
-        # Add camera_name if it exists in image_data, otherwise use the camera model
-        if "camera_name" in image_data:
-            batch["camera_name"] = [image_data["camera_name"]]
-        else:
-            camera_name_map = get_camera_name_map()
-            batch["camera_name"] = [camera_name_map[args.camera_model]]
-        
-        # Override bayer pattern if specified
-        if args.bayer_pattern:
-            # Create a bayer pattern tensor with the correct format for the model
-            if args.bayer_pattern == "RGGB":
-                bayer_pattern_array = np.array([[0, 1], [1, 2]], dtype=np.int64)
-            elif args.bayer_pattern == "GRBG":
-                bayer_pattern_array = np.array([[1, 0], [2, 1]], dtype=np.int64)
-            elif args.bayer_pattern == "GBRG":
-                bayer_pattern_array = np.array([[1, 2], [0, 1]], dtype=np.int64)
-            elif args.bayer_pattern == "BGGR":
-                bayer_pattern_array = np.array([[2, 1], [1, 0]], dtype=np.int64)
-            else:
-                raise ValueError(f"Invalid bayer pattern: {args.bayer_pattern}")
-            
-            batch["bayer_pattern"] = torch.from_numpy(bayer_pattern_array).unsqueeze(0).unsqueeze(0).to(args.device)
-        
-        # Override white balance if specified
-        if args.white_balance is not None:
-            print(f"Using white balance from CLI: {args.white_balance}")
-            wb = args.white_balance
-            white_balance = torch.tensor([wb[0], wb[1], wb[2]]).unsqueeze(0).to(args.device)
+        if modified:
+            white_balance = torch.tensor([default_wb[0], default_wb[1], default_wb[2]]).unsqueeze(0).to(args.device)
             batch["white_balance"] = torch.from_numpy(utils.camera.normalize_whitebalance(white_balance.cpu().numpy())).to(args.device)
-        else:
-            # Handle individual white balance components
-            default_wb = batch["white_balance"][0].cpu().numpy()
-            modified = False
-            
-            if args.wb_r is not None:
-                default_wb[0] = args.wb_r
-                modified = True
-            
-            if args.wb_g is not None:
-                default_wb[1] = args.wb_g
-                modified = True
-            
-            if args.wb_b is not None:
-                default_wb[2] = args.wb_b
-                modified = True
-            
-            if modified:
-                white_balance = torch.tensor([default_wb[0], default_wb[1], default_wb[2]]).unsqueeze(0).to(args.device)
-                batch["white_balance"] = torch.from_numpy(utils.camera.normalize_whitebalance(white_balance.cpu().numpy())).to(args.device)
-        
-        # Override color matrix if specified
-        if args.color_matrix is not None:
-            cm = args.color_matrix
-            batch["color_matrix"] = torch.tensor(cm).unsqueeze(0).to(args.device)
-        elif args.cm_00 is not None:
-            color_matrix = torch.tensor([
-                [
-                    args.cm_00 if args.cm_00 is not None else batch["color_matrix"][0, 0, 0].item(), 
-                    args.cm_01 if args.cm_01 is not None else batch["color_matrix"][0, 0, 1].item(), 
-                    args.cm_02 if args.cm_02 is not None else batch["color_matrix"][0, 0, 2].item()
-                ],
-                [
-                    args.cm_10 if args.cm_10 is not None else batch["color_matrix"][0, 1, 0].item(), 
-                    args.cm_11 if args.cm_11 is not None else batch["color_matrix"][0, 1, 1].item(), 
-                    args.cm_12 if args.cm_12 is not None else batch["color_matrix"][0, 1, 2].item()
-                ],
-                [
-                    args.cm_20 if args.cm_20 is not None else batch["color_matrix"][0, 2, 0].item(), 
-                    args.cm_21 if args.cm_21 is not None else batch["color_matrix"][0, 2, 1].item(), 
-                    args.cm_22 if args.cm_22 is not None else batch["color_matrix"][0, 2, 2].item()
-                ]
-            ])
-            batch["color_matrix"] = color_matrix.unsqueeze(0).to(args.device)
-        
-        # Override optical parameters if specified
-        if getattr(args, 'focal_length', None) and args.focal_length != image_data["focal_length"]:
-            batch["focal_length"] = torch.tensor([args.focal_length]).to(args.device)
-        
-        if getattr(args, 'f_number', None) is not None and args.f_number != image_data["f_number"]:
-            batch["f_number"] = torch.tensor([args.f_number]).to(args.device)
-        
-        if getattr(args, 'exposure_time', None) and args.exposure_time != image_data["exposure_time"]:
-            batch["exposure_time"] = torch.tensor([args.exposure_time]).to(args.device)
-        
-        if getattr(args, 'iso', None) and args.iso != image_data["iso_sensitivity"]:
-            batch["iso_sensitivity"] = torch.tensor([args.iso]).to(args.device)
+    
+    # Override color matrix if specified
+    if args.color_matrix is not None:
+        cm = args.color_matrix
+        batch["color_matrix"] = torch.tensor(cm).unsqueeze(0).to(args.device)
+    elif args.cm_00 is not None:
+        color_matrix = torch.tensor([
+            [
+                args.cm_00 if args.cm_00 is not None else batch["color_matrix"][0, 0, 0].item(), 
+                args.cm_01 if args.cm_01 is not None else batch["color_matrix"][0, 0, 1].item(), 
+                args.cm_02 if args.cm_02 is not None else batch["color_matrix"][0, 0, 2].item()
+            ],
+            [
+                args.cm_10 if args.cm_10 is not None else batch["color_matrix"][0, 1, 0].item(), 
+                args.cm_11 if args.cm_11 is not None else batch["color_matrix"][0, 1, 1].item(), 
+                args.cm_12 if args.cm_12 is not None else batch["color_matrix"][0, 1, 2].item()
+            ],
+            [
+                args.cm_20 if args.cm_20 is not None else batch["color_matrix"][0, 2, 0].item(), 
+                args.cm_21 if args.cm_21 is not None else batch["color_matrix"][0, 2, 1].item(), 
+                args.cm_22 if args.cm_22 is not None else batch["color_matrix"][0, 2, 2].item()
+            ]
+        ])
+        batch["color_matrix"] = color_matrix.unsqueeze(0).to(args.device)
+    
+    # Override optical parameters if specified
+    if getattr(args, 'focal_length', None) and args.focal_length != image_data["focal_length"]:
+        batch["focal_length"] = torch.tensor([args.focal_length]).to(args.device)
+    
+    if getattr(args, 'f_number', None) is not None and args.f_number != image_data["f_number"]:
+        batch["f_number"] = torch.tensor([args.f_number]).to(args.device)
+    
+    if getattr(args, 'exposure_time', None) and args.exposure_time != image_data["exposure_time"]:
+        batch["exposure_time"] = torch.tensor([args.exposure_time]).to(args.device)
+    
+    if getattr(args, 'iso', None) and args.iso != image_data["iso_sensitivity"]:
+        batch["iso_sensitivity"] = torch.tensor([args.iso]).to(args.device)
         
     # Update args with the parameters for logging
     args.focal_length = batch["focal_length"].item()
@@ -443,26 +447,28 @@ def main():
         output = model(batch).clip(0, 1)
     
     # Save output image
-    if args.image_id:
-        output_filename = f"{args.image_id}_processed.png"
-    else:
-        output_filename = f"{Path(args.raw_path).stem}_processed.png"
-    
+    output_filename = f"{args.image_id}_processed.png"
     output_path = os.path.join(args.output_dir, output_filename)
     print(f"Saving output to {output_path}")
     utils.io.saveimg(output, args.output_dir, output_filename)
+
+    # Save ground-truth
+    gt_filename = f"{args.image_id}_gt.png"
+    gt_path = os.path.join(args.output_dir, gt_filename)
+    print(f"Saving ground-truth to {gt_path}")
+    utils.io.saveimg(image_data["rgb"], args.output_dir, gt_filename)
     
     # Save parameters used for reference
-    if args.image_id:
-        param_filename = f"{args.image_id}_params.txt"
-    else:
-        param_filename = f"{Path(args.raw_path).stem}_params.txt"
-    
+    param_filename = f"{args.image_id}_params.txt"
     param_path = os.path.join(args.output_dir, param_filename)
     with open(param_path, 'w') as f:
-        f.write(f"Image: {args.image_id if args.image_id else args.raw_path}\n")
-        f.write(f"Camera Model: {args.camera_model}\n")
-        f.write(f"Bayer Pattern: {args.bayer_pattern}\n")
+        f.write(f"Image: {args.image_id}\n")
+        if args.camera_model:
+            f.write(f"Camera Model: {args.camera_model}\n")
+        else:
+            f.write(f"Camera Name: {image_data['camera_name']}\n")
+            f.write(f"Dataset: {args.dataset}\n")
+        f.write(f"Bayer Pattern: {batch['bayer_pattern'].flatten().cpu().numpy()}\n")
         f.write(f"White Balance: {batch['white_balance'][0].cpu().numpy()}\n")
         f.write(f"Focal Length: {args.focal_length} mm\n")
         f.write(f"F-Number: {args.f_number}\n")
