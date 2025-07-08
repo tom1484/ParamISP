@@ -1,20 +1,21 @@
 #!/usr/bin/env python
-import os
 import argparse
 from pathlib import Path
 import torch
-import torch.nn as nn
-import matplotlib.pyplot as plt
-from torchvision.utils import make_grid
-import numpy as np
+
+import sys
+sys.path.append("./")
 
 # Import modules directly since we're now inside the ParamISP folder
 import utils.io
-import utils.convert
 import utils.metrics
+from utils.inference import (
+    load_image_base_on_camera,
+    load_image_base_on_dataset,
+    create_batch,
+    ensure_batch_has_required_fields,
+)
 import data.utils
-import data.modules
-import models.paramisp
 import layers.bayer
 import layers.color
 from models.paramisp import CommonArgs
@@ -369,7 +370,9 @@ def main():
     parser = argparse.ArgumentParser(description="Visualize ParamISP forward and inverse processes")
     parser.add_argument("--forward-model", type=str, default=None, help="Path to forward model checkpoint")
     parser.add_argument("--inverse-model", type=str, default=None, help="Path to inverse model checkpoint")
-    parser.add_argument("--camera", type=str, default="D7000", help="Camera model")
+    parser.add_argument("--camera", type=str, help="Camera model")
+    parser.add_argument("--dataset", choices=data.utils.EVERY_DATASET, help="Camera model")
+    parser.add_argument("--image-id", type=str, required=True, help="Image ID from dataset (e.g., r01170470t)")
     parser.add_argument("--output", type=str, default="visualization_output", help="Output directory")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", 
                         help="Device to run on")
@@ -383,18 +386,32 @@ def main():
     # Create visualizer
     visualizer = ParamISPVisualizer(args.forward_model, args.inverse_model, args.output, args.device)
     
-    # Load a sample image
-    print(f"Loading sample image from camera {args.camera}, index {args.index}")
-    datamodule = data.modules.CameraTestingData(
-        args.camera, crop_type="full", bayer_pattern="rggb", use_extra=True,
-        crop_size=1024, batch_size=1, num_workers=0, select_index=[args.index]
-    )
-    datamodule.setup()
-    batch = next(iter(datamodule.test_dataloader()))
+    # Load input image
+    if args.camera is None and args.dataset is None:
+        raise ValueError("At least one of camera and dataset needs to be specified.")
+    if args.camera:
+        print(f"Loading image with ID '{args.image_id}' from {args.camera} dataset...")
+        image_data = load_image_base_on_camera(args.image_id, args.camera)
+    if args.dataset:
+        print(f"Loading image with ID '{args.image_id}' from {args.dataset} dataset...")
+        image_data = load_image_base_on_dataset(args.image_id, args.dataset)
     
-    # Move batch to device
-    batch = {k: v.to(args.device) if isinstance(v, torch.Tensor) else v 
-             for k, v in batch.items()}
+    # Debug print to check image_data contents
+    # print(f"Image data keys: {list(image_data.keys())}")
+    batch = create_batch(image_data, args)
+    batch = ensure_batch_has_required_fields(batch, args)
+
+    # print(f"Loading sample image from camera {args.camera}, index {args.index}")
+    # datamodule = data.modules.CameraTestingData(
+    #     args.camera, crop_type="full", bayer_pattern="rggb", use_extra=True,
+    #     crop_size=1024, batch_size=1, num_workers=0, select_index=[args.index]
+    # )
+    # datamodule.setup()
+    # batch = next(iter(datamodule.test_dataloader()))
+    
+    # # Move batch to device
+    # batch = {k: v.to(args.device) if isinstance(v, torch.Tensor) else v 
+    #          for k, v in batch.items()}
     
     # Determine which processes to run based on provided model paths
     run_forward = args.forward and args.forward_model is not None
