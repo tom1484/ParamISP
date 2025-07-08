@@ -134,6 +134,9 @@ def main(args):
     ]
     output = "patchsets/fivek"
 
+    # Record the image indices of each camera
+    camera_indices = {}
+
     for source in sources:
         print(f"Processing {source} ...")
         for file in tqdm(sorted(os.listdir(source))):
@@ -150,6 +153,13 @@ def main(args):
             if extra is None:
                 continue
 
+            # Update camera indices
+            camera_name = extra["camera_name"]
+            if camera_name not in camera_indices:
+                camera_indices[camera_name] = set()
+            camera_indices[camera_name].add(id)
+
+            # Load raw data and generate rgb image
             raw_data = rawpy.imread(path)
             raw = raw_data.raw_image_visible
             rgb = raw_data.postprocess(user_flip=0)
@@ -195,6 +205,12 @@ def main(args):
                         #     breakpoint()
                         tff.imwrite(raw_path, raw_patch)
                         tff.imwrite(rgb_path, rgb_patch)
+
+    os.makedirs(join(output, "_cameras"), exist_ok=True)
+    for camera_name, indices in camera_indices.items():
+        with open(join(output, "_cameras", f"{camera_name}.txt"), "w") as f:
+            for id in sorted(list(indices)):
+                f.write(id + "\n")
 
 
 if __name__ == "__main__":
