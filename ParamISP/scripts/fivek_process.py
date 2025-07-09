@@ -115,6 +115,7 @@ def rawpy_to_meta(raw: RawPy, extra: dict) -> dict | None:
 def crop(raw, rgb, target_shape):
     shape = raw.shape
     starts = ((shape[0] - target_shape[0]) // 2, (shape[1] - target_shape[1]) // 2)
+    starts = (starts[0] & -2, starts[1] & -2)
     ends = (starts[0] + target_shape[0], starts[1] + target_shape[1])
     return (
         raw[starts[0] : ends[0], starts[1] : ends[1]],
@@ -201,8 +202,6 @@ def main(args):
                         raw_path = join(out_dir, raw_filename)
                         rgb_path = join(out_dir, rgb_filename)
 
-                        # if 0 in raw_patch.shape or 0 in rgb_patch.shape:
-                        #     breakpoint()
                         tff.imwrite(raw_path, raw_patch)
                         tff.imwrite(rgb_path, rgb_patch)
 
