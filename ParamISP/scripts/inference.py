@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 import argparse
-import os
 import json
 import torch
+from traceback import print_exception
 
 import sys
 sys.path.append("./")
@@ -19,6 +19,7 @@ from utils.inference import (
 )
 import data.utils
 import models.paramisp
+from pathlib import Path
 
 
 def parse_wb(wb_str):
@@ -69,7 +70,7 @@ def parse_args():
 
     # Basic arguments
     parser.add_argument("--ckpt-path", type=str, required=True, help="Path to the model checkpoint")
-    parser.add_argument("-o", "--output-dir", type=str, required=True, help="Output directory for generated images")
+    parser.add_argument("-o", "--output-dir", type=Path, required=True, help="Output directory for generated images")
     parser.add_argument("-s", "--run-suffix", type=str, help="Suffix of output directory")
     parser.add_argument("--dataset", choices=data.utils.EVERY_DATASET, help="Dataset where images are located")
     parser.add_argument("--camera-name", type=str, help="Full camera name")
@@ -146,7 +147,7 @@ def get_datasets(args) -> list[data.utils.PatchDataset]:
 
 
 def run(run_dir, model, image_id, image_data, args):
-    os.makedirs(run_dir, exist_ok=True)
+    run_dir.mkdir(parents=True, exist_ok=True)
     print(f"Using output directory: {run_dir}")
 
     # Debug print to check image_data contents
@@ -252,20 +253,20 @@ def run(run_dir, model, image_id, image_data, args):
 
     # Save output image
     output_filename = f"processed.png"
-    output_path = os.path.join(run_dir, output_filename)
+    output_path = run_dir / output_filename
     print(f"Saving output to {output_path}")
     utils.io.saveimg(output, run_dir, output_filename)
 
     # Save ground-truth
     gt_filename = f"ground-truth.png"
-    gt_path = os.path.join(run_dir, gt_filename)
+    gt_path = run_dir / gt_filename
     print(f"Saving ground-truth to {gt_path}")
     utils.io.saveimg(image_data["rgb"], run_dir, gt_filename)
 
     # Save parameters used for reference
     param_filename = f"parameters.txt"
-    param_path = os.path.join(run_dir, param_filename)
-    with open(param_path, "w") as f:
+    param_path = run_dir / param_filename
+    with param_path.open("w") as f:
         f.write(f"Image: {image_id}\n")
         if args.camera_model:
             f.write(f"Camera Model: {args.camera_model}\n")
@@ -285,14 +286,14 @@ def run(run_dir, model, image_id, image_data, args):
 
 def make_run_dir(run_id, args):
     if args.run_suffix is None:
-        run_dir = f"{args.output_dir}/{run_id}"
+        run_dir = args.output_dir / run_id
     else:
-        run_dir = f"{args.output_dir}/{run_id}-{args.run_suffix}"
+        run_dir = args.output_dir / f"{run_id}-{args.run_suffix}"
     
-    if os.path.exists(run_dir) and not args.overwrite:
+    if run_dir.exists() and not args.overwrite:
         return run_dir, True
     
-    os.makedirs(run_dir, exist_ok=True)
+    run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir, False
 
 def main():
@@ -331,7 +332,11 @@ def main():
                     print(f"Run directory {run_dir} exists.")
                 else:
                     image_data = dataset[i]
-                    run(run_dir, model, image_id, image_data, args)
+                    try:
+                        run(run_dir, model, image_id, image_data, args)
+                    except Exception as e:
+                        print_exception(e)
+                        
     
     elif args.camera_model is not None:
         datasets = get_datasets(args)
@@ -343,7 +348,10 @@ def main():
                     print(f"Run directory {run_dir} exists.")
                 else:
                     image_data = dataset[i]
-                    run(run_dir, model, image_id, image_data, args)
+                    try:
+                        run(run_dir, model, image_id, image_data, args)
+                    except Exception as e:
+                        print_exception(e)
 
 
 if __name__ == "__main__":

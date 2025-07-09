@@ -1,10 +1,9 @@
-import pdb
-
-import os
-from os.path import join
+from pathlib import Path
+import argparse
+from tqdm import tqdm
 
 import rawpy
-from rawpy import RawPy
+from rawpy import RawPy  # type: ignore
 import exifread
 
 import numpy as np
@@ -13,9 +12,6 @@ import torch
 import yaml
 import tifffile as tff
 
-import argparse
-from tqdm import tqdm
-
 
 def process_ratio(value, simplify=False):
     if isinstance(value, int):
@@ -23,7 +19,7 @@ def process_ratio(value, simplify=False):
             return value
         else:
             return f"{value}/1"
-    elif isinstance(value, exifread.utils.Ratio):
+    elif isinstance(value, exifread.utils.Ratio):  # type: ignore
         return f"{value.num}/{value.den}"
 
 
@@ -125,28 +121,30 @@ def crop(raw, rgb, target_shape):
 
 def main(args):
     sources = [
-        "patchsets/fivek_original/raw_photos/HQa1to700/photos/",
-        # "patchsets/fivek_original/raw_photos/HQa701to1400/photos/",
-        # "patchsets/fivek_original/raw_photos/HQa1401to2100/photos/",
-        # "patchsets/fivek_original/raw_photos/HQa2101to2800/photos/",
-        # "patchsets/fivek_original/raw_photos/HQa2801to3500/photos/",
-        # "patchsets/fivek_original/raw_photos/HQa3501to4200/photos/",
-        # "patchsets/fivek_original/raw_photos/HQa4201to5000/photos/",
+        Path("patchsets/fivek_original/raw_photos/HQa1to700/photos"),
+        Path("patchsets/fivek_original/raw_photos/HQa701to1400/photos"),
+        Path("patchsets/fivek_original/raw_photos/HQa1401to2100/photos"),
+        Path("patchsets/fivek_original/raw_photos/HQa2101to2800/photos"),
+        Path("patchsets/fivek_original/raw_photos/HQa2801to3500/photos"),
+        Path("patchsets/fivek_original/raw_photos/HQa3501to4200/photos"),
+        Path("patchsets/fivek_original/raw_photos/HQa4201to5000/photos"),
     ]
-    output = "patchsets/fivek"
+    output = Path("patchsets/fivek")
 
     # Record the image indices of each camera
+    camera_output = output / "_cameras"
+    camera_output.mkdir(parents=True, exist_ok=True)
     camera_indices = {}
 
     for source in sources:
         print(f"Processing {source} ...")
-        for file in tqdm(sorted(os.listdir(source))):
-            path = join(source, file)
-            basename = file.split(".")[0]
+        for file in tqdm(sorted(source.iterdir())):
+            if not file.is_file():
+                continue
+            basename = file.stem
             id = basename.split("-")[0]
-            out_dir = join(output, id)
 
-            with open(path, "rb") as f:
+            with file.open("rb") as f:
                 tags = exifread.process_file(f)
 
             extra = extract_extra(tags)
@@ -161,7 +159,7 @@ def main(args):
             camera_indices[camera_name].add(id)
 
             # Load raw data and generate rgb image
-            raw_data = rawpy.imread(path)
+            raw_data = rawpy.imread(str(file))
             raw = raw_data.raw_image_visible
             rgb = raw_data.postprocess(user_flip=0)
             # Keep the dataset simple, ensures no scaling or padding
@@ -172,22 +170,20 @@ def main(args):
             # Ensure the meta data can be extracted
             if meta is None:
                 continue
+            
+            out_dir = output / id
+            out_dir.mkdir(parents=True, exist_ok=True)
 
-            os.makedirs(out_dir, exist_ok=True)
-
-            extra_path = join(out_dir, "extra.yml")
-            if not os.path.exists(extra_path) or args.overwrite_extra:
+            extra_path = out_dir / "extra.yml"
+            if not extra_path.exists() or args.overwrite_extra:
                 with open(extra_path, "w") as f:
                     yaml.dump(extra, f, sort_keys=True)
 
-            meta_path = join(out_dir, "metadata.pt")
-            if not os.path.exists(meta_path) or args.overwrite_meta:
+            meta_path = out_dir / "metadata.pt"
+            if not meta_path.exists() or args.overwrite_meta:
                 torch.save(meta, meta_path)
 
-            if (
-                not os.path.exists(join(out_dir, "raw-512-00000-00000.tif"))
-                or args.overwrite_image
-            ):
+            if not (out_dir / f"raw-512-00000-00000.tif").exists() or args.overwrite_image:
                 raw, rgb = crop(raw, rgb, meta["image_size"])
                 height, width = meta["image_size"]
 
@@ -199,17 +195,23 @@ def main(args):
                         raw_filename = f"raw-512-{r:05d}-{c:05d}.tif"
                         rgb_filename = f"rgb-512-{r:05d}-{c:05d}.tif"
 
-                        raw_path = join(out_dir, raw_filename)
-                        rgb_path = join(out_dir, rgb_filename)
+                        raw_path = out_dir / raw_filename
+                        rgb_path = out_dir / rgb_filename
 
                         tff.imwrite(raw_path, raw_patch)
                         tff.imwrite(rgb_path, rgb_patch)
 
-    os.makedirs(join(output, "_cameras"), exist_ok=True)
-    for camera_name, indices in camera_indices.items():
-        with open(join(output, "_cameras", f"{camera_name}.txt"), "w") as f:
-            for id in sorted(list(indices)):
-                f.write(id + "\n")
+        for camera_name, indices in camera_indices.items():
+            camera_indices_path = camera_output / f"{camera_name}.txt"
+            existing_indices = set()
+            if camera_indices_path.exists():
+                with camera_indices_path.open("r") as f:
+                    for line in f:
+                        existing_indices.add(line.strip())
+            merged_indices = existing_indices.union(indices)
+            with camera_indices_path.open("w") as f:
+                for id in sorted(list(merged_indices)):
+                    f.write(id + "\n")
 
 
 if __name__ == "__main__":
