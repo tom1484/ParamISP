@@ -12,6 +12,8 @@ import utils.camera
 from utils.inference import (
     load_image_base_on_camera, 
     load_image_base_on_dataset, 
+    load_datasets,
+    load_camera_datasets,
     create_batch,
     ensure_batch_has_required_fields, 
 )
@@ -66,14 +68,16 @@ def parse_args():
         description="ParamISP Inference with Custom Parameters")
 
     # Basic arguments
-    parser.add_argument("-o", "--output-dir", type=str, required=True, help="Output directory for generated images")
-    parser.add_argument("-i", "--run-id", type=str, required=True, help="Unique id of output directory")
     parser.add_argument("--ckpt-path", type=str, required=True, help="Path to the model checkpoint")
-    parser.add_argument("--image-id", type=str, required=True, help="Image ID from dataset (e.g., r01170470t)")
+    parser.add_argument("-o", "--output-dir", type=str, required=True, help="Output directory for generated images")
+    parser.add_argument("-s", "--run-suffix", type=str, help="Suffix of output directory")
+    parser.add_argument("--dataset", choices=data.utils.EVERY_DATASET, help="Dataset where images are located")
+    parser.add_argument("--camera-name", type=str, help="Full camera name")
+    parser.add_argument("--camera-model", choices=data.utils.EVERY_CAMERA_MODEL, help="Camera model")
+    parser.add_argument("--image-id", type=str, help="Image ID from dataset (e.g., r01170470t)")
+    parser.add_argument("--overwrite", action="store_true", default=False, help="Whether to overwrite existing run")
 
     # Camera parameters
-    parser.add_argument("--camera-model", choices=data.utils.EVERY_CAMERA_MODEL, help="Camera model")
-    parser.add_argument("--dataset", choices=data.utils.EVERY_DATASET, help="Camera model")
 
     # White balance parameters - support both vector and individual components
     wb_group = parser.add_mutually_exclusive_group()
@@ -112,46 +116,38 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
-    args = parse_args()
-
-    base_output_dir = args.output_dir
-    if args.run_id is None:
-        # Create output directory with run index
-        run_index = 1
-        # Find the next available run index
-        while True:
-            run_dir = f"{base_output_dir}/{run_index:03d}"
-            if not os.path.exists(run_dir):
-                break
-            run_index += 1
-    else:
-        run_dir = f"{base_output_dir}/{args.run_id}"
-        if os.path.exists(run_dir):
-            raise ValueError(f"Run id {args.run_id} exists.")
-
-    args.output_dir = run_dir
-    os.makedirs(args.output_dir, exist_ok=True)
-    print(f"Using output directory: {args.output_dir}")
-
-    # Load model
-    print(f"Loading model from {args.ckpt_path}...")
-    model_args = models.paramisp.CommonArgs(inverse=False)
-    model = models.paramisp.ParamISP(model_args)
-    checkpoint = torch.load(args.ckpt_path, map_location=args.device)
-    model.load_state_dict(checkpoint["state_dict"])
-    model.to(args.device)
-    model.eval()
-
+def get_image_data(args) -> data.utils.ImageData:
+    assert args.image_id is not None
     # Load input image
-    if args.camera_model is None and args.dataset is None:
-        raise ValueError("At least one of camera_model and dataset needs to be specified.")
+    if not ((args.camera_model is None) ^ (args.dataset is None)):
+        raise ValueError("Exact one of camera_model and dataset needs to be specified.")
     if args.camera_model:
         print(f"Loading image with ID '{args.image_id}' from {args.camera_model} dataset...")
         image_data = load_image_base_on_camera(args.image_id, args.camera_model)
     if args.dataset:
         print(f"Loading image with ID '{args.image_id}' from {args.dataset} dataset...")
         image_data = load_image_base_on_dataset(args.image_id, args.dataset)
+    
+    return image_data
+
+
+def get_datasets(args) -> list[data.utils.PatchDataset]:
+    # Load input image
+    if not ((args.camera_model is None) ^ (args.dataset is None)):
+        raise ValueError("Exact one of camera_model and dataset needs to be specified.")
+    if args.camera_model:
+        print(f"Loading {args.camera_model} datasets...")
+        datasets = load_camera_datasets(args.camera_model)
+    if args.dataset:
+        print(f"Loading {args.dataset} datasets...")
+        datasets = load_datasets(args.dataset)
+
+    return datasets
+
+
+def run(run_dir, model, image_id, image_data, args):
+    os.makedirs(run_dir, exist_ok=True)
+    print(f"Using output directory: {run_dir}")
 
     # Debug print to check image_data contents
     # print(f"Image data keys: {list(image_data.keys())}")
@@ -255,22 +251,22 @@ def main():
         output = model(batch).clip(0, 1)
 
     # Save output image
-    output_filename = f"{args.image_id}_processed.png"
-    output_path = os.path.join(args.output_dir, output_filename)
+    output_filename = f"processed.png"
+    output_path = os.path.join(run_dir, output_filename)
     print(f"Saving output to {output_path}")
-    utils.io.saveimg(output, args.output_dir, output_filename)
+    utils.io.saveimg(output, run_dir, output_filename)
 
     # Save ground-truth
-    gt_filename = f"{args.image_id}_gt.png"
-    gt_path = os.path.join(args.output_dir, gt_filename)
+    gt_filename = f"ground-truth.png"
+    gt_path = os.path.join(run_dir, gt_filename)
     print(f"Saving ground-truth to {gt_path}")
-    utils.io.saveimg(image_data["rgb"], args.output_dir, gt_filename)
+    utils.io.saveimg(image_data["rgb"], run_dir, gt_filename)
 
     # Save parameters used for reference
-    param_filename = f"{args.image_id}_params.txt"
-    param_path = os.path.join(args.output_dir, param_filename)
+    param_filename = f"parameters.txt"
+    param_path = os.path.join(run_dir, param_filename)
     with open(param_path, "w") as f:
-        f.write(f"Image: {args.image_id}\n")
+        f.write(f"Image: {image_id}\n")
         if args.camera_model:
             f.write(f"Camera Model: {args.camera_model}\n")
         else:
@@ -287,5 +283,88 @@ def main():
     print("Done!")
 
 
+def make_run_dir(run_id, args):
+    if args.run_suffix is None:
+        run_dir = f"{args.output_dir}/{run_id}"
+    else:
+        run_dir = f"{args.output_dir}/{run_id}-{args.run_suffix}"
+    
+    if os.path.exists(run_dir) and not args.overwrite:
+        return run_dir, True
+    
+    os.makedirs(run_dir, exist_ok=True)
+    return run_dir, False
+
+def main():
+    args = parse_args()
+    
+    # Load model
+    print(f"Loading model from {args.ckpt_path}...")
+    model_args = models.paramisp.CommonArgs(inverse=False)
+    model = models.paramisp.ParamISP(model_args)
+    checkpoint = torch.load(args.ckpt_path, map_location=args.device)
+    model.load_state_dict(checkpoint["state_dict"])
+    model.to(args.device)
+    model.eval()
+
+    # Get image data or datasets and run
+    if args.image_id is not None:
+        run_dir, exists = make_run_dir(args.image_id, args)
+        if exists:
+            print(f"Run directory {run_dir} exists.")
+        else:
+            image_data = get_image_data(args)
+            run(run_dir, model, args.image_id, image_data, args)
+
+    elif args.dataset is not None:
+        datasets = get_datasets(args)
+        for dataset in datasets:
+            for i in range(len(dataset)):
+                if args.camera_name is not None:
+                    metadata = dataset.get_metadata(i)
+                    if metadata["camera_name"] != args.camera_name:
+                        continue
+
+                image_id = dataset.get_image_id(i)
+                run_dir, exists = make_run_dir(image_id, args)
+                if exists:
+                    print(f"Run directory {run_dir} exists.")
+                else:
+                    image_data = dataset[i]
+                    run(run_dir, model, image_id, image_data, args)
+    
+    elif args.camera_model is not None:
+        datasets = get_datasets(args)
+        for dataset in datasets:
+            for i in range(len(dataset)):
+                image_id = dataset.get_image_id(i)
+                run_dir, exists = make_run_dir(image_id, args)
+                if exists:
+                    print(f"Run directory {run_dir} exists.")
+                else:
+                    image_data = dataset[i]
+                    run(run_dir, model, image_id, image_data, args)
+
+
 if __name__ == "__main__":
     main()
+
+
+## Examples
+
+# CUDA_VISIBLE_DEVICES=1 FIVEK_PATCHSET_DIR=patchsets/fivek python scripts/inference.py \                                                 (param-isp)
+#       --ckpt-path ./weights/pre_training/forward.ckpt \
+#       --dataset FIVEK \
+#       --image-id a0001 \
+#       --output-dir ./runs/extra/fivek/all
+
+# CUDA_VISIBLE_DEVICES=1 FIVEK_PATCHSET_DIR=patchsets/fivek python scripts/inference.py \                                                 (param-isp)
+#       --ckpt-path ./weights/pre_training/forward.ckpt \
+#       --dataset FIVEK \
+#       --camera-name "NIKON D70s" \
+#       --output-dir ./runs/extra/fivek/D70s
+
+# CUDA_VISIBLE_DEVICES=1 RAISE_PATCHSET_DIR=patchsets/RAISE python scripts/inference.py \                                                 (param-isp)
+#       --ckpt-path ./weights/pre_training/forward.ckpt \
+#       --camera-model D7000 \
+#       --output-dir ./runs/extra/RAISE/D7000

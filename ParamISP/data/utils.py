@@ -538,6 +538,13 @@ class PatchDataset(torch.utils.data.Dataset):
         window = self.compute_window(image_size, source_bayer_pattern=bayer_pattern)
     
         return self.load_image_data(index, inst_id, window, metadata)
+    
+    def get_metadata(self, index):
+        inst_id = self.datalist[index]
+        return self.load_metadata(inst_id)
+    
+    def get_image_id(self, index):
+        return self.datalist[index]
 
     def compute_window(self, size: tuple[int, int], *,
                        source_bayer_pattern: np.ndarray | None = None) -> CropWindow:

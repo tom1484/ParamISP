@@ -6,8 +6,28 @@ import utils.env
 import data.utils
 
 
-def find_image_in_datalist(image_id, list_name):
+def get_datalists(list_name):
     """Find the image ID in the datalists for the specified camera model."""
+    # Check in training datalist
+    datalist_paths = [
+        Path("data/datalist") / f"{list_name}.train.txt",
+        Path("data/datalist") / f"{list_name}.val.txt",
+        Path("data/datalist") / f"{list_name}.test.txt",
+        Path("data/datalist/dataset") / f"{list_name}.train.txt",
+        Path("data/datalist/dataset") / f"{list_name}.val.txt",
+        Path("data/datalist/dataset") / f"{list_name}.test.txt",
+    ]
+
+    valid_datalist_paths = []
+    for datalist_path in datalist_paths:
+        if datalist_path.exists():
+            valid_datalist_paths.append(datalist_path)
+
+    return valid_datalist_paths
+
+
+def find_image_in_datalist(image_id, list_name):
+    """Find the image ID in the datalists for the specified list."""
     # Check in training datalist
     datalist_paths = [
         Path("data/datalist") / f"{list_name}.train.txt",
@@ -34,13 +54,9 @@ def find_image_in_datalist(image_id, list_name):
     )
 
 
-def load_image_base_on_dataset(image_id, dataset):
-    """Load an image from the dataset using its ID."""
-    # Find the image in datalists
-    datalist_path, image_index = find_image_in_datalist(image_id, dataset)
-
+def get_data_dir(dataset_name):
     # Determine the dataset directory based on camera model
-    match dataset:
+    match dataset_name:
         case "realblursrc":
             data_dir = utils.env.get_or_throw("REALBLURSRC_PATCHSET_DIR")
         case "RAISE":
@@ -50,8 +66,39 @@ def load_image_base_on_dataset(image_id, dataset):
         case "FIVEK":
             data_dir = utils.env.get_or_throw("FIVEK_PATCHSET_DIR")
         case _:
-            raise ValueError(f"Invalid dataset type: {dataset}")
+            raise ValueError(f"Invalid dataset type: {dataset_name}")
+    
+    return data_dir
 
+
+def load_datasets(dataset_name):
+    datalist_paths = get_datalists(dataset_name)
+
+    # Determine the dataset directory based on camera model
+    data_dir = get_data_dir(dataset_name)
+    print(f"Using data directory: {data_dir}")
+
+    # Create dataset instances
+    datasets = [
+        data.utils.PatchDataset(
+            datalist_file=datalist_path, data_dir=Path(data_dir), use_extra=True
+        ) for datalist_path in datalist_paths
+    ]
+
+    print(f"Dataset created with images in :")
+    for datalist_path in datalist_paths:
+        print(f"  {datalist_path}")
+
+    return datasets
+
+
+def load_image_base_on_dataset(image_id, dataset_name):
+    """Load an image from the dataset using its ID."""
+    # Find the image in datalists
+    datalist_path, image_index = find_image_in_datalist(image_id, dataset_name)
+
+    # Determine the dataset directory based on camera model
+    data_dir = get_data_dir(dataset_name)
     print(f"Using data directory: {data_dir}")
 
     # Create a dataset instance
@@ -70,11 +117,7 @@ def load_image_base_on_dataset(image_id, dataset):
     return image_data
 
 
-def load_image_base_on_camera(image_id, camera_model):
-    """Load an image from the dataset using its ID."""
-    # Find the image in datalists
-    datalist_path, image_index = find_image_in_datalist(image_id, camera_model)
-
+def get_camera_data_dir(camera_model):
     # Determine the dataset directory based on camera model
     match camera_model:
         case "A7R3":
@@ -85,7 +128,38 @@ def load_image_base_on_camera(image_id, camera_model):
             data_dir = utils.env.get_or_throw("S7ISP_PATCHSET_DIR")
         case _:
             raise ValueError(f"Invalid dataset type: {camera_model}")
+    
+    return data_dir
 
+
+def load_camera_datasets(camera_model):
+    datalist_paths = get_datalists(camera_model)
+
+    # Determine the dataset directory based on camera model
+    data_dir = get_camera_data_dir(camera_model)
+    print(f"Using data directory: {data_dir}")
+
+    # Create dataset instances
+    datasets = [
+        data.utils.PatchDataset(
+            datalist_file=datalist_path, data_dir=Path(data_dir), use_extra=True
+        ) for datalist_path in datalist_paths
+    ]
+
+    print(f"Dataset created with images in :")
+    for datalist_path in datalist_paths:
+        print(f"  {datalist_path}")
+
+    return datasets
+
+
+def load_image_base_on_camera(image_id, camera_model):
+    """Load an image from the dataset using its ID."""
+    # Find the image in datalists
+    datalist_path, image_index = find_image_in_datalist(image_id, camera_model)
+
+    # Determine the dataset directory based on camera model
+    data_dir = get_camera_data_dir(camera_model)
     print(f"Using data directory: {data_dir}")
 
     # Create a dataset instance
