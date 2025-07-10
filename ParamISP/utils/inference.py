@@ -192,6 +192,18 @@ def create_batch(image_data, args):
         # Assume it's [batch, height, width] and add channel dimension
         raw_tensor = raw_tensor.unsqueeze(1)
 
+    # Ensure the dimensions are multiples of block size
+    if args.block_size is not None:
+        height, width = raw_tensor.shape[-2:]
+        if height % args.block_size != 0 or width % args.block_size != 0:
+            new_height = height // args.block_size * args.block_size
+            new_width = width // args.block_size * args.block_size
+            raw_tensor = raw_tensor[..., :new_height, :new_width]
+            print(f"Resized raw tensor to {new_height}x{new_width}")
+
+            image_data["rgb"] = image_data["rgb"][..., :new_height, :new_width]
+            print(f"Resized rgb tensor to {new_height}x{new_width}")
+
     # print(f"Raw tensor shape: {raw_tensor.shape}")
 
     # Always start with the original parameters from the dataset

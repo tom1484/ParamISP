@@ -77,6 +77,7 @@ def parse_args():
     parser.add_argument("--camera-model", choices=data.utils.EVERY_CAMERA_MODEL, help="Camera model")
     parser.add_argument("--image-id", type=str, help="Image ID from dataset (e.g., r01170470t)")
     parser.add_argument("--overwrite", action="store_true", default=False, help="Whether to overwrite existing run")
+    parser.add_argument("--block-size", type=int, default=4, help="Basic block size for processing")
 
     # Camera parameters
 
