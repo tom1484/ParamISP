@@ -546,6 +546,10 @@ class PatchDataset(torch.utils.data.Dataset):
     def get_image_id(self, index):
         return self.datalist[index]
 
+    def get_extra_metadata(self, index):
+        inst_id = self.datalist[index]
+        return self.load_extra_metadata(inst_id)
+
     def compute_window(self, size: tuple[int, int], *,
                        source_bayer_pattern: np.ndarray | None = None) -> CropWindow:
         """ Compute the crop window of the image.

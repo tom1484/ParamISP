@@ -1,11 +1,13 @@
 #!/usr/bin/env python
+import sys
+
+sys.path.append("./")
+
 import argparse
 import json
 import torch
+import yaml
 from traceback import print_exception
-
-import sys
-sys.path.append("./")
 
 import utils.io
 import utils.camera
@@ -69,6 +71,7 @@ def parse_args():
         description="ParamISP Inference with Custom Parameters")
 
     # Basic arguments
+    
     parser.add_argument("--ckpt-path", type=str, required=True, help="Path to the model checkpoint")
     parser.add_argument("-o", "--output-dir", type=Path, required=True, help="Output directory for generated images")
     parser.add_argument("-s", "--run-suffix", type=str, help="Suffix of output directory")
@@ -151,8 +154,7 @@ def run(run_dir, model, image_id, image_data, args):
     run_dir.mkdir(parents=True, exist_ok=True)
     print(f"Using output directory: {run_dir}")
 
-    # Debug print to check image_data contents
-    # print(f"Image data keys: {list(image_data.keys())}")
+    # WARNING: There might be problem loading parameters from the dataset.
     batch = create_batch(image_data, args)
 
     # Override white balance if specified
@@ -264,23 +266,28 @@ def run(run_dir, model, image_id, image_data, args):
     print(f"Saving ground-truth to {gt_path}")
     utils.io.saveimg(image_data["rgb"], run_dir, gt_filename)
 
-    # Save parameters used for reference
-    param_filename = f"parameters.txt"
-    param_path = run_dir / param_filename
-    with param_path.open("w") as f:
-        f.write(f"Image: {image_id}\n")
-        if args.camera_model:
-            f.write(f"Camera Model: {args.camera_model}\n")
-        else:
-            f.write(f"Camera Name: {image_data['camera_name']}\n")
-            f.write(f"Dataset: {args.dataset}\n")
-        f.write(f"Bayer Pattern: {batch['bayer_pattern'].flatten().cpu().numpy()}\n")
-        f.write(f"White Balance: {batch['white_balance'][0].cpu().numpy()}\n")
-        f.write(f"Focal Length: {args.focal_length} mm\n")
-        f.write(f"F-Number: {args.f_number}\n")
-        f.write(f"Exposure Time: {args.exposure_time} s\n")
-        f.write(f"ISO: {args.iso}\n")
-        f.write(f"Color Matrix:\n{batch['color_matrix'][0].cpu().numpy()}\n")
+    # Save parameters used for reference in YAML format
+    # param_filename = f"parameters.yml"
+    # param_path = run_dir / param_filename
+
+    # params = {
+    #     "image": image_id,
+    # }
+    # if args.camera_model:
+    #     params["camera_model"] = args.camera_model
+    # else:
+    #     params["camera_name"] = image_data["camera_name"]
+    #     params["dataset"] = args.dataset
+    # params["bayer_pattern"] = batch["bayer_pattern"].flatten().cpu().numpy().tolist()
+    # params["white_balance"] = batch["white_balance"][0].cpu().numpy().tolist()
+    # params["focal_length"] = float(args.focal_length)
+    # params["f_number"] = float(args.f_number)
+    # params["exposure_time"] = float(args.exposure_time)
+    # params["iso"] = int(args.iso)
+    # params["color_matrix"] = batch["color_matrix"][0].cpu().numpy().tolist()
+
+    # with param_path.open("w") as f:
+    #     yaml.dump(params, f, default_flow_style=False)
 
     print("Done!")
 
