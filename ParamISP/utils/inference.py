@@ -201,10 +201,8 @@ def create_batch(image_data, args):
             raw_tensor = raw_tensor[..., :new_height, :new_width]
             print(f"Resized raw tensor to {new_height}x{new_width}")
 
-            image_data["rgb"] = image_data["rgb"][..., :new_height, :new_width]
+            image_data["rgb"] = image_data["rgb"][:new_height, :new_width, ...]
             print(f"Resized rgb tensor to {new_height}x{new_width}")
-
-    # print(f"Raw tensor shape: {raw_tensor.shape}")
 
     # Always start with the original parameters from the dataset
     print("Loading original parameters from the dataset")
