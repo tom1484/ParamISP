@@ -134,7 +134,6 @@ def analyze_dataset(data_directories, extra_metadata, camera_name=None):
     stats = {
         "dataset": data_directories.keys(),
         "num_samples": len(df),
-        "camera_models": sorted(list(extra_metadata.keys())),
         "exposure_time": {
             "min": df["exposure_time"].min(),
             "max": df["exposure_time"].max(),
@@ -267,7 +266,6 @@ def print_stats(stats):
     """Print statistics in a readable format."""
     print(f"\nDataset: {stats['dataset']}")
     print(f"Number of samples: {stats['num_samples']}")
-    print(f"Camera models: {', '.join(stats['camera_models'])}")
     
     print("\nParameter Statistics:")
     for param in ["exposure_time", "f_number", "focal_length", "iso_sensitivity"]:
@@ -304,7 +302,6 @@ def save_stats(all_dfs, all_stats, output_dir):
         row = {
             "dataset": dataset_name,
             "num_samples": stats["num_samples"],
-            "camera_models": ", ".join(stats["camera_models"]),
         }
         
         for param in ["exposure_time", "f_number", "focal_length", "iso_sensitivity"]:
