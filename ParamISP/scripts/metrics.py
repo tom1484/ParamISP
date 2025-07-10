@@ -3,10 +3,11 @@ import sys
 sys.path.append("./")
 
 import argparse
-from pathlib import Path
-
-import torch
 import numpy as np
+import torch
+
+import yaml
+from pathlib import Path
 
 from utils.io import loadimg
 from utils.metrics import psnr, ssim
@@ -47,8 +48,26 @@ def main():
         if not result_dir.is_dir():
             continue
         metrics_file = result_dir / "metrics.txt"
-        if metrics_file.exists() and not args.overwrite:
-            # read existing metrics
+        metrics_yaml_file = result_dir / "metrics.yml"
+        # Check for existing YAML metrics file first
+        if metrics_yaml_file.exists() and not args.overwrite:
+            # read existing metrics from YAML
+            try:
+                with metrics_yaml_file.open() as f:
+                    metrics = yaml.safe_load(f)
+                psnr_val = float(metrics.get("psnr"))
+                ssim_val = float(metrics.get("ssim"))
+                lpips_val = float(metrics.get("lpips"))
+            except Exception as e:
+                print(f"Warning: could not parse metrics.yml for {result_dir.name}: {e}")
+                continue
+            print(f"Using existing metrics for {result_dir.name}")
+            psnr_vals.append(psnr_val)
+            ssim_vals.append(ssim_val)
+            lpips_vals.append(lpips_val)
+            continue
+        # Fallback to old metrics.txt if present and not overwritten
+        elif metrics_file.exists() and not args.overwrite:
             with metrics_file.open() as f:
                 lines = f.read().splitlines()
             try:
@@ -98,13 +117,16 @@ def main():
                 res_lpips = res_lpips[0]
             lpips_val = res_lpips.item()
 
-        # write metrics
-        with metrics_file.open("w") as f:
-            f.write(f"PSNR: {psnr_val:.4f}\n")
-            f.write(f"SSIM: {ssim_val:.4f}\n")
-            f.write(f"LPIPS: {lpips_val:.4f}\n")
+        # write metrics to YAML
+        metrics_dict = {
+            "psnr": float(f"{psnr_val:.4f}"),
+            "ssim": float(f"{ssim_val:.4f}"),
+            "lpips": float(f"{lpips_val:.4f}")
+        }
+        with metrics_yaml_file.open("w") as f:
+            yaml.dump(metrics_dict, f, default_flow_style=False)
 
-        print(f"Saved metrics for {result_dir.name}")
+        print(f"Saved metrics for {result_dir.name} to metrics.yml")
         # append to lists
         psnr_vals.append(psnr_val)
         ssim_vals.append(ssim_val)
