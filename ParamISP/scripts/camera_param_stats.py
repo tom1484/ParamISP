@@ -10,6 +10,14 @@ import matplotlib.pyplot as plt
 from collections import defaultdict
 import re
 
+PARAMS = ["exposure_time", "iso", "f_number", "focal_length"]
+LOG_SCALE = {
+    "exposure_time": True,
+    "iso": True,
+    "f_number": False,
+    "focal_length": False,
+}
+
 def load_extra_metadata(file_path):
     """Load camera parameters from extra.yml file."""
     try:
@@ -113,9 +121,9 @@ def analyze_dataset(data_directories, extra_metadata, camera_name=None):
         if extra and (camera_name is None or extra["camera_name"] == camera_name):
             params["camera_name"].append(extra["camera_name"])
             params["exposure_time"].append(extra["exposure_time"])
+            params["iso"].append(extra["iso_sensitivity"])
             params["f_number"].append(extra["f_number"])
             params["focal_length"].append(extra["focal_length"])
-            params["iso_sensitivity"].append(extra["iso_sensitivity"])
             width, height = get_image_dimensions_from_patches(item)
             if width and height:
                 image_widths.append(width)
@@ -134,35 +142,18 @@ def analyze_dataset(data_directories, extra_metadata, camera_name=None):
     stats = {
         "dataset": data_directories.keys(),
         "num_samples": len(df),
-        "exposure_time": {
-            "min": df["exposure_time"].min(),
-            "max": df["exposure_time"].max(),
-            "mean": df["exposure_time"].mean(),
-            "median": df["exposure_time"].median(),
-            "std": df["exposure_time"].std()
-        },
-        "f_number": {
-            "min": df["f_number"].min(),
-            "max": df["f_number"].max(),
-            "mean": df["f_number"].mean(),
-            "median": df["f_number"].median(),
-            "std": df["f_number"].std()
-        },
-        "focal_length": {
-            "min": df["focal_length"].min(),
-            "max": df["focal_length"].max(),
-            "mean": df["focal_length"].mean(),
-            "median": df["focal_length"].median(),
-            "std": df["focal_length"].std()
-        },
-        "iso_sensitivity": {
-            "min": df["iso_sensitivity"].min(),
-            "max": df["iso_sensitivity"].max(),
-            "mean": df["iso_sensitivity"].mean(),
-            "median": df["iso_sensitivity"].median(),
-            "std": df["iso_sensitivity"].std()
-        }
     }
+    for param, log_scale in LOG_SCALE.items():
+        data = df[param]
+        if log_scale:
+            data = np.log10(data.astype(float))
+        stats[param] = {
+            "min": data.min(),
+            "max": data.max(),
+            "mean": data.mean(),
+            "median": data.median(),
+            "std": data.std()
+        }
     
     # Add image size statistics if available
     if "image_width" in df.columns and "image_height" in df.columns:
@@ -192,10 +183,8 @@ def plot_parameter_distributions(dfs, output_dir: Path):
     )
     
     # Create plots for each parameter
-    params = ["exposure_time", "f_number", "focal_length", "iso_sensitivity"]
-    log_scales = [True, False, False, True]
-    
-    for param, log_scale in zip(params, log_scales):
+    (output_dir / "distributions").mkdir(parents=True, exist_ok=True)
+    for param, log_scale in LOG_SCALE.items():
         plt.figure(figsize=(10, 6))
         
         # Use log scale for exposure time and ISO
@@ -214,25 +203,23 @@ def plot_parameter_distributions(dfs, output_dir: Path):
         plt.grid(True, alpha=0.3)
         plt.gca().yaxis.set_major_locator(plt.MaxNLocator(integer=True))  # type: ignore
         
-        plt.savefig(output_dir / f"{param}_distribution.png", dpi=300)
+        plt.savefig(output_dir / "distributions" / f"{param}.png", dpi=300)
         plt.close()
     
     # Create scatter plots to show relationships between parameters
     param_pairs = [
-        (0, 1),
-        (0, 2),
-        (0, 3),
-        (1, 2),
-        (1, 3),
-        (2, 3)
+        ("exposure_time", "iso"),
+        ("exposure_time", "f_number"),
+        ("exposure_time", "focal_length"),
+        ("iso", "f_number"),
+        ("iso", "focal_length"),
+        ("f_number", "focal_length"),
     ]
 
     (output_dir / "relations").mkdir(parents=True, exist_ok=True)
-    for x_param_idx, y_param_idx in param_pairs:
-        x_param = params[x_param_idx]
-        y_param = params[y_param_idx]
-        x_log_scale = log_scales[x_param_idx]
-        y_log_scale = log_scales[y_param_idx]
+    for x_param, y_param in param_pairs:
+        x_log_scale = LOG_SCALE[x_param]
+        y_log_scale = LOG_SCALE[y_param]
 
         plt.figure(figsize=(10, 6))
         
@@ -268,7 +255,7 @@ def print_stats(stats):
     print(f"Number of samples: {stats['num_samples']}")
     
     print("\nParameter Statistics:")
-    for param in ["exposure_time", "f_number", "focal_length", "iso_sensitivity"]:
+    for param in PARAMS:
         print(f"\n{param.replace('_', ' ').title()}:")
         print(f"  Min: {stats[param]['min']}")
         print(f"  Max: {stats[param]['max']}")
@@ -304,7 +291,7 @@ def save_stats(all_dfs, all_stats, output_dir):
             "num_samples": stats["num_samples"],
         }
         
-        for param in ["exposure_time", "f_number", "focal_length", "iso_sensitivity"]:
+        for param, log_scale in LOG_SCALE.items():
             for stat_type in ["min", "max", "mean", "median", "std"]:
                 row[f"{param}_{stat_type}"] = stats[param][stat_type]
         
@@ -315,8 +302,9 @@ def save_stats(all_dfs, all_stats, output_dir):
                     row[f"{param}_{stat_type}"] = stats[param][stat_type]
         
         combined_stats = pd.concat([combined_stats, pd.DataFrame([row])], ignore_index=True)
-    
-    combined_stats.to_csv(output_dir / "camera_parameter_statistics.csv", index=False)
+
+    # Transpose the combined_stats DataFrame before saving to CSV
+    combined_stats.T.to_csv(output_dir / "camera_parameter_statistics.csv", header=False)
     print(f"\nStatistics saved to {output_dir / 'camera_parameter_statistics.csv'}")
     print(f"Plots saved to {output_dir}")
 
@@ -332,10 +320,15 @@ def main(args):
     # Analyze each dataset
     all_dfs = {}
     all_stats = {}
+
+    all_data_directories = {}
+    all_extra_metadatas = {}
     
     for name, path in args.dataset:
         data_directories = load_data_directories(path)
         extra_metadatas = load_extra_metadatas(data_directories)
+        all_data_directories[name] = data_directories
+        all_extra_metadatas[name] = extra_metadatas
         if args.group_camera or args.camera:
             camera_models = load_camera_models(extra_metadatas)
             if args.camera:
@@ -359,6 +352,22 @@ def main(args):
                 all_dfs[name] = df
                 all_stats[name] = stats
     
+    # Add a entry as the summary of all datasets
+    if len(all_stats) > 1:
+        # Merge all entries of all_data_directories into a single dictionary
+        merged_data_directories = {}
+        merged_extra_metadatas = {}
+        for d in all_data_directories.values():
+            merged_data_directories.update(d)
+        for e in all_extra_metadatas.values():
+            merged_extra_metadatas.update(e)
+        print("Analyzing merged dataset (all datasets combined)")
+        result = analyze_dataset(merged_data_directories, merged_extra_metadatas)
+        if result:
+            df, stats = result
+            all_dfs["ALL"] = df
+            all_stats["ALL"] = stats
+
     save_stats(all_dfs, all_stats, args.run_dir)
 
 def parse_dataset(dataset_str):
