@@ -8,6 +8,7 @@ import json
 import torch
 import yaml
 from traceback import print_exception
+from pathlib import Path
 
 import utils.io
 import utils.camera
@@ -21,7 +22,6 @@ from utils.inference import (
 )
 import data.utils
 import models.paramisp
-from pathlib import Path
 
 
 def parse_wb(wb_str):
@@ -75,12 +75,14 @@ def parse_args():
     parser.add_argument("--ckpt-path", type=str, required=True, help="Path to the model checkpoint")
     parser.add_argument("-o", "--output-dir", type=Path, required=True, help="Output directory for generated images")
     parser.add_argument("-s", "--run-suffix", type=str, help="Suffix of output directory")
-    parser.add_argument("--dataset", choices=data.utils.EVERY_DATASET, help="Dataset where images are located")
-    parser.add_argument("--camera-name", type=str, help="Full camera name")
-    parser.add_argument("--camera-model", choices=data.utils.EVERY_CAMERA_MODEL, help="Camera model")
-    parser.add_argument("--image-id", type=str, help="Image ID from dataset (e.g., r01170470t)")
     parser.add_argument("--overwrite", action="store_true", default=False, help="Whether to overwrite existing run")
+
+    parser.add_argument("--dataset", required=True, choices=data.utils.EVERY_DATASET, help="Dataset where images are located")
+    parser.add_argument("--group-camera-name", action="store_true", default=False, help="Group by camera name")
+    parser.add_argument("--image-id", type=str, help="Image ID from dataset (e.g., r01170470t)")
+
     parser.add_argument("--block-size", type=int, default=4, help="Basic block size for processing")
+    parser.add_argument("--no-param-net", action="store_true", default=False, help="Whether to use parameter network")
 
     # Camera parameters
 
@@ -124,28 +126,16 @@ def parse_args():
 def get_image_data(args) -> data.utils.ImageData:
     assert args.image_id is not None
     # Load input image
-    if not ((args.camera_model is None) ^ (args.dataset is None)):
-        raise ValueError("Exact one of camera_model and dataset needs to be specified.")
-    if args.camera_model:
-        print(f"Loading image with ID '{args.image_id}' from {args.camera_model} dataset...")
-        image_data = load_image_base_on_camera(args.image_id, args.camera_model)
-    if args.dataset:
-        print(f"Loading image with ID '{args.image_id}' from {args.dataset} dataset...")
-        image_data = load_image_base_on_dataset(args.image_id, args.dataset)
+    print(f"Loading image with ID '{args.image_id}' from {args.dataset} dataset...")
+    image_data = load_image_base_on_dataset(args.image_id, args.dataset)
     
     return image_data
 
 
 def get_datasets(args) -> list[data.utils.PatchDataset]:
     # Load input image
-    if not ((args.camera_model is None) ^ (args.dataset is None)):
-        raise ValueError("Exact one of camera_model and dataset needs to be specified.")
-    if args.camera_model:
-        print(f"Loading {args.camera_model} datasets...")
-        datasets = load_camera_datasets(args.camera_model)
-    if args.dataset:
-        print(f"Loading {args.dataset} datasets...")
-        datasets = load_datasets(args.dataset)
+    print(f"Loading {args.dataset} datasets...")
+    datasets = load_datasets(args.dataset)
 
     return datasets
 
@@ -309,8 +299,13 @@ def main():
     
     # Load model
     print(f"Loading model from {args.ckpt_path}...")
+
     model_args = models.paramisp.CommonArgs(inverse=False)
-    model = models.paramisp.ParamISP(model_args)
+    if args.no_param_net:
+        model = models.paramisp.ParamISPNoParamNet(model_args)
+    else:
+        model = models.paramisp.ParamISP(model_args)
+
     checkpoint = torch.load(args.ckpt_path, map_location=args.device)
     model.load_state_dict(checkpoint["state_dict"])
     model.to(args.device)
@@ -329,29 +324,16 @@ def main():
         datasets = get_datasets(args)
         for dataset in datasets:
             for i in range(len(dataset)):
-                if args.camera_name is not None:
-                    metadata = dataset.get_metadata(i)
-                    if metadata["camera_name"] != args.camera_name:
-                        continue
+                image_id = dataset.get_image_id(i)
 
-                image_id = dataset.get_image_id(i)
-                run_dir, exists = make_run_dir(image_id, args)
-                if exists:
-                    print(f"Run directory {run_dir} exists.")
+                if args.group_camera_name:
+                    # Automatically group by camera name
+                    extra_meta = dataset.get_extra_metadata(i)
+                    run_id = f"{extra_meta['camera_name']}/{image_id}"  # type: ignore
                 else:
-                    image_data = dataset[i]
-                    try:
-                        run(run_dir, model, image_id, image_data, args)
-                    except Exception as e:
-                        print_exception(e)
-                        
-    
-    elif args.camera_model is not None:
-        datasets = get_datasets(args)
-        for dataset in datasets:
-            for i in range(len(dataset)):
-                image_id = dataset.get_image_id(i)
-                run_dir, exists = make_run_dir(image_id, args)
+                    run_id = image_id
+
+                run_dir, exists = make_run_dir(run_id, args)
                 if exists:
                     print(f"Run directory {run_dir} exists.")
                 else:
@@ -377,10 +359,5 @@ if __name__ == "__main__":
 # CUDA_VISIBLE_DEVICES=1 FIVEK_PATCHSET_DIR=patchsets/fivek python scripts/inference.py \                                                 (param-isp)
 #       --ckpt-path ./weights/pre_training/forward.ckpt \
 #       --dataset FIVEK \
-#       --camera-name "NIKON D70s" \
-#       --output-dir ./runs/extra/fivek/D70s
-
-# CUDA_VISIBLE_DEVICES=1 RAISE_PATCHSET_DIR=patchsets/RAISE python scripts/inference.py \                                                 (param-isp)
-#       --ckpt-path ./weights/pre_training/forward.ckpt \
-#       --camera-model D7000 \
-#       --output-dir ./runs/extra/RAISE/D7000
+#       --group-camera-name \
+#       --output-dir ./runs/extra/fivek/all
