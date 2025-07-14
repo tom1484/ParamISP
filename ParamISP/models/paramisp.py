@@ -31,6 +31,7 @@ import models.utils.cli as cli
 from models.algorithm import AlgorithmOnlyModel
 
 class CommonArgs(
+    arg.NoParamNet,
     arg.ProcessArgs,
     arg.RunsPath,
     arg.BayerPattern,
@@ -41,6 +42,7 @@ class CommonArgs(
     inverse: bool
     @classmethod
     def add_to(cls, parser: argparse.ArgumentParser):
+        arg.NoParamNet.add_to(parser)
         arg.RunsPath.add_to(parser)
         parser.add_argument("--inverse",   action="store_true",  help="Inverse the tone curve")
         arg.BayerPattern.add_to(parser)
@@ -124,7 +126,10 @@ def main():
     cli.init_env()
     args = CommonArgs(parse_args())
 
-    model = ParamISP(args)
+    if args.no_param_net:
+        model = ParamISPNoParamNet(args)
+    else:
+        model = ParamISP(args)
 
     if args.mode == "train":
         args = TrainArgs(args)
@@ -280,6 +285,182 @@ class ParamISP(AlgorithmOnlyModel):
         
             z = self.get_input_features(x, common_features)
             x = self.hypertonenet(x, z, embed)
+
+        if training_mode:
+            
+            y = batch["raw" if args.inverse else "rgb"]
+            loss = F.l1_loss(self.crop(x), self.crop(y))
+
+            return x, loss
+
+        else:
+            return x
+
+    def training_step(self, batch: data.utils.ImageDataBatch, batch_idx: int):
+        args = TrainArgs(self.args)
+        
+        x, loss = self(batch, training_mode=True)
+        
+        optimizer = self.optimizers()
+        optimizer.zero_grad()
+  
+        if self.current_epoch > 10:
+            torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
+        self.manual_backward(loss)
+
+        optimizer.step()
+
+        self.log_on_training({"loss": loss}, batch_size=batch["raw"].size(0))
+
+        return loss
+
+    def validation_step(self, batch: data.utils.ImageDataBatch, batch_idx: int):
+        args = TrainArgs(self.args)
+
+        x = self(batch)
+        y = batch["raw" if args.inverse else "rgb"]
+
+        metrics = self.compute_metrics(x, y)
+
+        self.log_on_validation(metrics, batch_size=batch["raw"].size(0))
+        if batch_idx == 0:
+            self.log_images_on_validation({"val/raw": batch["raw"]}, batch, raw=True)
+            self.log_images_on_validation({"val/rgb": batch["rgb"]}, batch, raw=False)
+            self.log_images_on_validation({"val/est": x}, batch, raw=args.inverse)
+
+        return metrics
+
+    def test_step(self, batch: data.utils.ImageDataBatch, batch_idx: int):
+        args = TestArgs(self.args)
+
+        y = batch["raw" if args.inverse else "rgb"]
+        x = self(batch).clip(0,1) 
+
+        metrics = self.compute_metrics(x, y)
+
+        self.log_on_test(metrics, batch, batch_idx)
+
+        return metrics
+
+    def predict_step(self, batch: data.utils.ImageDataBatch, batch_idx: int):
+        args = PredictArgs(self.args)
+
+        h, w = batch["raw"].shape[-2:]
+        max_h = 2400; max_w = 3600
+        if h > max_h:
+            cut_h = (((h - max_h)//2)//2)*2
+            batch["raw"] = batch["raw"][..., cut_h:cut_h+max_h, :]
+            batch["rgb"] = batch["rgb"][..., cut_h:cut_h+max_h, :]
+        if w > max_w:
+            cut_w = (((w - max_w)//2)//2)*2
+            batch["raw"] = batch["raw"][..., :, cut_w:cut_w+max_w]
+            batch["rgb"] = batch["rgb"][..., :, cut_w:cut_w+max_w]
+        
+        # to be devided by 4 for inference
+        h, w = batch["raw"].shape[-2:]
+        batch["raw"] = batch["raw"][..., :(h//4)*4, :(w//4)*4]
+        batch["rgb"] = batch["rgb"][..., :(h//4)*4, :(w//4)*4]
+
+        inst_id = batch["inst_id"][0]
+        index = batch["index"][0].item()
+    
+        if "weights" in args.ckpt_names[0]: # using official weights
+            out_path = Path(self.args.runs_root, self.args.runs_name, self.args.mode, "official_weights", args.camera_model, str(index).zfill(3))
+        else:
+            out_path = Path(self.args.runs_root, self.args.runs_name, self.args.mode, args.ckpt_names[0], args.camera_model, str(index).zfill(3))
+        out_path.mkdir(parents=True, exist_ok=True)
+        out_path = out_path.as_posix()
+
+        x = self(batch).clip(0, 1)
+        
+        if args.inverse:
+            utils.io.savetiff(batch["raw"], out_path, f"{index}-{inst_id}-raw_gt.tiff", u16=True)
+            utils.io.savetiff(x, out_path, f"{index}-{inst_id}-raw_est.tiff", u16=True)
+        else:
+            utils.io.saveimg(batch["rgb"], out_path, f"{index}-{inst_id}-rgb_gt.png")
+            utils.io.saveimg(x, out_path, f"{index}-{inst_id}-rgb_est.png")
+
+
+class ParamISPNoParamNet(AlgorithmOnlyModel):
+
+    def set_attributes(self):
+        super().set_attributes()
+        args = CommonArgs(self.args)
+        self.automatic_optimization = False
+
+        self.ms_ssim_loss = kornia.losses.MS_SSIMLoss() # do not use
+
+        self.optics_dropout_probability = 0.2
+
+        self.id_channels = 16 # camera id variant
+        self.feat_channels = (3 * (1 + 2 + 4+8+16) + 3) # pixel, gradient, soft histogram, over-exposed mask
+
+        self.main_channels = 64
+        self.hyper_channels = 64
+
+        self.tonenet = layers.nn.v2.GlobalNet(self.feat_channels, self.main_channels)
+        self.localnet = layers.nn.v2.LocalNet(self.feat_channels, self.main_channels, num_block=2, num_scale=2)
+
+    def configure_optimizers(self):
+        args = TrainArgs(self.args)
+
+        optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, self.parameters()),
+                                      lr=args.lr, weight_decay=args.weight_decay)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_step, args.lr_gamma)
+        return [optimizer], [scheduler]
+
+    def get_common_features(self, x: torch.Tensor, batch: data.utils.ImageDataBatch):
+        args = CommonArgs(self.args)
+
+        common_features = layers.nn.v2.over_exposed_mask(x)
+
+        return common_features
+
+    def get_input_features(self, x: torch.Tensor, z: torch.Tensor):
+        args = CommonArgs(self.args)
+
+        return torch.cat([x, layers.nn.v2.content_features(
+            x, use_gradient=True, histogram_bins=[4, 8, 16]), z], dim=-3)
+
+    def forward(self, batch: data.utils.ImageDataBatch, training_mode: bool = False, extra: bool = False):
+        args = TrainArgs(self.args)
+
+        if args.inverse: # inverse
+            x: torch.Tensor = batch["rgb"]
+            if training_mode:
+                x = x + torch.randn_like(x) * 0.4 / 255. # add dequantization noise
+            
+            common_features = self.get_common_features(x, batch)
+            
+            z = self.get_input_features(x, common_features)
+            x = self.tonenet(x, z)
+
+            z = self.get_input_features(x, common_features)
+            x = self.localnet(x, z)
+          
+            x = layers.color.apply_color_matrix(x, batch["color_matrix"].inverse())
+            x = layers.bayer.apply_white_balance(x, batch["bayer_pattern"], 1/batch["white_balance"], mosaic_flag=False)
+            x = layers.bayer.mosaic(x, batch["bayer_pattern"])
+
+        else: # forward
+            x = batch["raw"]
+            
+            if training_mode: # add dequantization noise
+                x = x + torch.randn_like(x) * 0.4 / batch["quantized_level"].unsqueeze(-1).unsqueeze(-1)
+                x = layers.bayer.gather(x, batch["bayer_pattern"])
+
+            x = self.demosaic(x, batch["bayer_pattern"])
+            x = layers.bayer.apply_white_balance(x, batch["bayer_pattern"], batch["white_balance"], mosaic_flag=False)
+            x = x.clip(0, 1)
+            x = layers.color.apply_color_matrix(x, batch["color_matrix"])
+
+            common_features = self.get_common_features(x, batch)
+    
+            z = self.get_input_features(x, common_features)
+            x = self.localnet(x, z)
+        
+            z = self.get_input_features(x, common_features)
+            x = self.tonenet(x, z)
 
         if training_mode:
             

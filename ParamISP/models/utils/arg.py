@@ -87,6 +87,14 @@ class Parser(argparse.ArgumentParser):
         return args
 
 
+class NoParamNet(Namespace):
+    no_param_net: bool
+
+    @classmethod
+    def add_to(cls, parser: argparse.ArgumentParser):
+        parser.add_argument("--no-param-net", action="store_true", help="Use parameter network")
+
+
 class CameraModels(Namespace):
     camera_models: list[data.modules.CameraModel]
 
